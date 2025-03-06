@@ -1,7 +1,8 @@
 //// tokenizer
 
 const tokenizeErrorCount = 10000;
-const symbolPattern = /[a-zA-Z\+-\/\*=:><\?!]/;
+const symbolPattern = /[a-zA-Z\+-\/\*=:><\?!0-9]/;
+const symbolStartPattern = /[a-zA-Z\+-\/\*=:><\?!]/;
 
 function tokenize(src) {
   let lenv = {
@@ -32,7 +33,7 @@ function tokenize(src) {
       readNumber(lenv);
     } else if (lenv.c === "'") {
       readQuote(lenv);
-    } else if (lenv.c.match(symbolPattern)) {
+    } else if (lenv.c.match(symbolStartPattern)) {
       readSymbol(lenv);
     } else {
       throw new Error(`syntax error at character ${lenv.i}`);
@@ -200,7 +201,7 @@ function printAst(ast, depth = 0, s = []) {
 
 function createEenv() {
   let baseContext = {
-    progn: (eenv, ...args) => args[args.length - 1],
+    //progn: (eenv, ...args) => args[args.length - 1],
     print: (eenv, ...args) => console.log(...args),
     "+": (eenv, ...args) => args.slice(1).reduce((m, x) => m + x, args[0]),
     "-": (eenv, ...args) => args.slice(1).reduce((m, x) => m - x, args[0]),
@@ -248,14 +249,35 @@ function intern(eenv, sym, val) {
   curContext(eenv)[sym] = val;
 }
 
+function assign(eenv, sym, val) {
+  for (let i = 0; i < eenv.c.length; i++) {
+    let c = eenv.c[i];
+    if (sym in c) {
+      c[sym] = val;
+      return;
+    }
+  }
+  throw new Error(`symbol "${sym}" is not defined`);
+}
+
 function wrapProgn(ast) {
   let node = createNode();
   node.ts.push({ cls: "SYM", text: "progn" });
+  node.ts.push(ast);
+  return node;
 }
 
 function evaluate(ast, eenv = createEenv()) {
   if (ast.cls === "AST") {
-    if (ast.ts[0].cls === "SYM" && ast.ts[0].text === "fn") {
+    if (ast.ts[0].cls === "SYM" && ast.ts[0].text === "progn") {
+      pushContext(eenv);
+      let ret = undefined;
+      ast.ts.slice(1).forEach((t) => {
+        ret = evaluate(t, eenv);
+      });
+      popContext(eenv);
+      return ret;
+    } else if (ast.ts[0].cls === "SYM" && ast.ts[0].text === "fn") {
       let prms = ast.ts[1].ts;
       let fn = (eenv, ...args) => {
         pushContext(eenv);
@@ -269,9 +291,9 @@ function evaluate(ast, eenv = createEenv()) {
       return fn;
     } else if (ast.ts[0].cls === "SYM" && ast.ts[0].text === "if") {
       if (evaluate(ast.ts[1], eenv) === true) {
-        return evaluate(ast.ts[2], eenv);
+        return evaluate(wrapProgn(ast.ts[2]), eenv);
       } else if (ast.ts.length === 4) {
-        return evaluate(ast.ts[3], eenv);
+        return evaluate(wrapProgn(ast.ts[3]), eenv);
       }
     } else if (ast.ts[0].cls === "SYM" && ast.ts[0].text === "++") {
       intern(eenv, ast.ts[1].text, evaluate(ast.ts[1], eenv) + 1);
@@ -279,6 +301,10 @@ function evaluate(ast, eenv = createEenv()) {
       intern(eenv, ast.ts[1].text, evaluate(ast.ts[1], eenv) - 1);
     } else if (ast.ts[0].cls === "SYM" && ast.ts[0].text === "=") {
       let val = evaluate(ast.ts[2], eenv);
+      assign(eenv, ast.ts[1].text, val);
+      return val;
+    } else if (ast.ts[0].cls === "SYM" && ast.ts[0].text === "let") {
+      let val = ast.ts.length === 3 ? evaluate(ast.ts[2], eenv) : undefined;
       intern(eenv, ast.ts[1].text, val);
       return val;
     } else if (ast.ts[0].cls === "SYM" && ast.ts[0].text === "for") {
@@ -323,47 +349,32 @@ function evaluate(ast, eenv = createEenv()) {
   }
 }
 
-/*
-
-(= x 2)
-(= y 3)
-
-(print (+ x y))
-
-(print (if (> x y) x y))
-
-(if (=== (+ 1 3) 4) (print "foo") (print "bar"))
-
-(for ((i 0) (< i 10) (++ i)) 
-  (print i))
- */
+function run(script) {
+  evaluate(parse(tokenize(script)));
+}
 
 let script = `
 
-(= helloworld (fn (x) (print (+ "hello, " x))))
+(let helloworld (fn (x) (print (+ "hello, " x))))
 (helloworld "testuser")
 
-(= fact (fn (k n) 
-  (for ((i 1 m n) (< i n) (++ i))
+(let fact (fn (k n) 
+  (for ((i 1 m k) (< i n) (++ i))
     (= m (* m k)))))
 (print (fact 2 3))
 
-(= recur (fn (n) 
-  (if (> n 0)
-    (progn 
-      (print (+ "now:" n))
-      (recur (- n 1)))
-    (print (+ "now:" n)))))
-(recur 10)
+(let fact2 (fn (k n) (if (=== n 0) 1 (* k (fact2 k (- n 1))))))
+(print (fact2 3 3))
+
 `;
 
+run(script);
 
-
-console.log(script);
-let tokens = tokenize(script);
-tokens.forEach((t) => console.log(t));
-
-let ast = parse(tokens);
-console.log(printAst(ast));
-
-evaluate(ast);
+// console.log(script);
+// let tokens = tokenize(script);
+// tokens.forEach((t) => console.log(t));
+//
+// let ast = parse(tokens);
+// console.log(printAst(ast));
+//
+// evaluate(ast);
